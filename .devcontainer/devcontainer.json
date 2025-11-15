@@ -1,0 +1,50 @@
+{
+  "name": "Open Journal Environment",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+  "features": {
+    "ghcr.io/stuartleeks/dev-container-features/shell-history:0": {},
+    "ghcr.io/mamba-org/devcontainer-features/micromamba:1": {
+      "envFile": "/tmp/environment.yml",
+      "envName": "nexus",
+      "allowReinstall": true,
+      "autoActivate": false
+    }
+  },
+  "postCreateCommand": "echo '\n# Auto-activate nexus environment\nif command -v micromamba &> /dev/null; then\n  micromamba activate nexus 2>/dev/null || true\nfi' >> ~/.zshrc",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.black-formatter",
+        "ms-python.python",
+        "ms-python.debugpy",
+        "ms-python.vscode-pylance",
+        "ms-python.isort",
+        "kennylong.kubernetes-yaml-formatter",
+        "ms-toolsai.jupyter",
+        "executablebookproject.myst-vs-code",
+        "ms-azuretools.vscode-docker"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "/opt/conda/envs/nexus/bin/python",
+        "python.terminal.activateEnvironment": false,
+        "editor.formatOnSave": true,
+        "[python]": {
+          "editor.defaultFormatter": "ms-python.black-formatter"
+        },
+        "terminal.integrated.defaultProfile.linux": "zsh"
+      }
+    }
+  },
+  "forwardPorts": [
+    3000,
+    3100,
+    4553
+  ],
+  "remoteUser": "vscode",
+  "mounts": [
+    "source=mamba-cache,target=/mamba_cache,type=volume"
+  ]
+}
