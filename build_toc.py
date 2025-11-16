@@ -15,7 +15,9 @@ root: README
 parts:
   - caption: Static
     chapters:
+      - file: content/static/01-paper.md
       - file: content/static/02-justtext.md
+      - file: content/static/03-notebook.ipynb
   - caption: Journal Papers
     chapters:
 """
