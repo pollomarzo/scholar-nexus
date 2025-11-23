@@ -40,13 +40,13 @@ jobs:
       shell: micromamba-shell {0}
 
     - name: Build MyST site
-      run: myst build --html
+      run: cd nexus && myst build --html
       shell: micromamba-shell {0}
 
     - name: Upload artifact
       uses: actions/upload-pages-artifact@v3
       with:
-        path: './_build/html'
+        path: 'nexus/_build/html'
 
   deploy:
     environment:
