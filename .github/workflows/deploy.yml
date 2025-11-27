@@ -6,7 +6,7 @@ on:
     - main
   workflow_dispatch:
 env:
-  BASE_URL: /${{ github.event.repository.name }}
+  SITE_PREFIX: /${{ github.event.repository.name }}
 
 permissions:
   contents: read
@@ -35,18 +35,14 @@ jobs:
         cache-environment: true
         cache-downloads: true
 
-    - name: Run build_toc.py
-      run: python build_toc.py
-      shell: micromamba-shell {0}
-
-    - name: Build MyST site
-      run: cd nexus && myst build --html
+    - name: Run build_site.py
+      run: python build_site.py
       shell: micromamba-shell {0}
 
     - name: Upload artifact
       uses: actions/upload-pages-artifact@v3
       with:
-        path: 'nexus/_build/html'
+        path: 'nexus'
 
   deploy:
     environment:
