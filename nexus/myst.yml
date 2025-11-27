@@ -1,0 +1,16 @@
+# See docs at: https://mystmd.org/guide/frontmatter
+version: 1
+project:
+  id: d628baa0-c276-4d70-8412-308859ac40f1
+  title: Scholar Nexus
+  # description: 
+  # keywords: []
+  # authors: []
+  # github:
+
+
+site:
+  template: book-theme
+  # options:
+  #   favicon: favicon.ico
+  #   logo: site_logo.png
