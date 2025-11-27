@@ -1,24 +1,6 @@
 papers:
-- repo: "https://gitlab.com/pollomarzo/observing-ecco-model-vs-tide-gauges-affected-by-hurricane-maria.git"
-  main_file: "CISP2024-ECCO-TideGauges-HurricaneMaria-manuscript"
-
-- repo: "https://gitlab.com/pollomarzo/influence-of-enso-on-the-coastal-upwelling-along-northwest-africa.git"
-  main_file: "CISP-ENSO-Upwelling-Northwest-Africa-Manuscript"
-
-- repo: "https://gitlab.com/pollomarzo/publication-open-impact-of-two-climate-variabilities-enso-and-iod-on-the-onset-of-summer-monsoon-over-the-indonesia-north-australia-region.git"
-  main_file: "CISP-ENSO-&IOD-On-Onset-of-Summer-Moonson-Australia-Manuscript"
-
-- repo: "https://gitlab.com/pollomarzo/latitudinal-assessment-of-burned-area-within-the-argentinian-andean-patagonian-forest-for-the-2001-2019-fire-seasons.git"
-  main_file: "CISP2024-Burned-Area-Argentinia-2001-2019-manuscript"
-
-- repo: "https://gitlab.com/pollomarzo/assessing-spatio-temporal-precipitation-variability-and-extreme-events-in-india.git"
-  main_file: "CISP2024-Precipitation-Extreme-Events-India-manuscript"
-
-- repo: "https://gitlab.com/pollomarzo/exploring-land-cover-change-interactions-with-environmental-and-socioeconomic-factors-in-a-tropical-region-due-to-rapid-agricultural-increase.git"
-  main_file: "CISP2024-Land-cover-change-agricultural-increase-manuscript"
-
-- repo: "https://gitlab.com/pollomarzo/exploring-long-term-climatological-patterns-of-cloud-coverage-and-ndvi-in-east-africa-using-noaa-surface-reflectance-climate-data-record.git"
-  main_file: "CISP-2024-Long-term-climatological-patterns-East-Africa-manuscript"
 
 - repo: "https://gitlab.com/pollomarzo/oceanic-oscillations-and-congo-river-basin-climatology.git"
   main_file: "Fortepiano, Hesperosaurus_bon.Main.Text.revised.CISP"
+- repo: "https://gitlab.com/pollomarzo/observing-ecco-model-vs-tide-gauges-affected-by-hurricane-maria.git"
+  main_file: "CISP2024-ECCO-TideGauges-HurricaneMaria-manuscript"
