@@ -1,2 +1,2 @@
-oceanic-oscillations-and-congo-river-basin-climatology
-observing-ecco-model-vs-tide-gauges-affected-by-hurricane-maria
+oceanic-oscillations-congo
+ecco-tides-maria

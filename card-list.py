@@ -9,6 +9,7 @@ import traceback
 import urllib.request
 
 import yaml
+
 from unist import *
 
 LAYOUT_STYLE = {
@@ -38,9 +39,9 @@ def render_paper(name: str):
     try:
         print(f"Rendering {name}", file=sys.stderr, flush=True)
 
-        raw_base_url = f"https://gitlab.com/pollomarzo/{name}/-/raw/main"
+        raw_base_url = f"https://raw.githubusercontent.com/pollomarzo/{name}/main"
         config_url = f"{raw_base_url}/myst.yml"
-        book_url = f"https://scholar.nexus/{name}"
+        book_url = f"https://pollomarzo.github.io/{name}"
 
         # Load JB data
         config = fetch_yaml(config_url)
