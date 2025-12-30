@@ -1,0 +1,124 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Start Content Server",
+            "type": "shell",
+            "command": "conda activate nexus && HOST=0.0.0.0 myst start --keep-host --headless",
+            "options": {
+                "cwd": "${workspaceFolder}/nexus",
+                "shell": {
+                    "args": [
+                        "-i"
+                    ]
+                },
+            },
+            "isBackground": true,
+            "problemMatcher": {
+                "pattern": [
+                    {
+                        "regexp": ".",
+                        "file": 1,
+                        "location": 2,
+                        "message": 3
+                    }
+                ],
+                "background": {
+                    "activeOnStart": true,
+                    "beginsPattern": ".*",
+                    "endsPattern": ".*server started.*"
+                }
+            },
+            "presentation": {
+                "group": "myst-servers",
+                "reveal": "always",
+                "panel": "new"
+            }
+        },
+        {
+            "label": "Start Package Watcher",
+            "type": "shell",
+            "command": "npm run dev",
+            "options": {
+                "cwd": "${workspaceFolder}/myst-theme",
+                "shell": {
+                    "args": [
+                        "-i"
+                    ]
+                },
+            },
+            "isBackground": true,
+            "problemMatcher": {
+                "pattern": [
+                    {
+                        "regexp": ".",
+                        "file": 1,
+                        "location": 2,
+                        "message": 3
+                    }
+                ],
+                "background": {
+                    "activeOnStart": true,
+                    "beginsPattern": ".*",
+                    "endsPattern": ".*Watching for changes.*"
+                }
+            },
+            "presentation": {
+                "group": "myst-servers",
+                "reveal": "always",
+                "panel": "new"
+            }
+        },
+        {
+            "label": "Start Theme Server",
+            "type": "shell",
+            "command": "npm run theme:book",
+            "options": {
+                "cwd": "${workspaceFolder}/myst-theme",
+                "shell": {
+                    "args": [
+                        "-i"
+                    ]
+                },
+            },
+            "isBackground": true,
+            "problemMatcher": {
+                "pattern": [
+                    {
+                        "regexp": ".",
+                        "file": 1,
+                        "location": 2,
+                        "message": 3
+                    }
+                ],
+                "background": {
+                    "activeOnStart": true,
+                    "beginsPattern": ".*",
+                    "endsPattern": ".*Remix App Server started.*"
+                }
+            },
+            "presentation": {
+                "group": "myst-servers",
+                "reveal": "always",
+                "panel": "new"
+            }
+        },
+        {
+            "label": "Start All Servers",
+            "dependsOn": [
+                "Start Content Server",
+                "Start Package Watcher",
+                "Start Theme Server"
+            ],
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "new"
+            },
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            }
+        }
+    ]
+}

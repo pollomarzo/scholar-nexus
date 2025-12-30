@@ -25,7 +25,9 @@
         "kennylong.kubernetes-yaml-formatter",
         "ms-toolsai.jupyter",
         "executablebookproject.myst-vs-code",
-        "ms-azuretools.vscode-docker"
+        "ms-azuretools.vscode-docker",
+        "SanjulaGanepola.github-local-actions",
+        "ExecutableBookProject.myst-highlight"
       ],
       "settings": {
         "python.defaultInterpreterPath": "/opt/conda/envs/nexus/bin/python",

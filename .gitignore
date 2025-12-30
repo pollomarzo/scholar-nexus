@@ -2,10 +2,5 @@
 .DS_Store
 __pycache__/
 
-# generated/cloned by build_site.py
-nexus/content/papers/
-nexus/papers/
-nexus/index.html
-nexus/_build/
+
 _build
-nexus/_toc.yml

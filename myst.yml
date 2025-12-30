@@ -1,9 +1,8 @@
 version: 1
 
 project:
-  id: conference-proceedings-2024
-  title: Conference Proceedings 2024
-  description: Research papers on climate and oceanography
+  id: scholar-nexus-home
+  title: Scholar Nexus
   plugins:
   - type: executable
     path: card-list.py

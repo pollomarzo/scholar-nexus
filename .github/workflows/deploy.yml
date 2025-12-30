@@ -3,10 +3,10 @@ name: Deploy MyST to GitHub Pages
 on:
   push:
     branches:
-    - main
+      - main
   workflow_dispatch:
 env:
-  SITE_PREFIX: /${{ github.event.repository.name }}
+  BASE_URL: /${{ github.event.repository.name }}
 
 permissions:
   contents: read
@@ -22,27 +22,27 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-    - name: Setup Pages
-      uses: actions/configure-pages@v3
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Setup Pages
+        uses: actions/configure-pages@v3
 
-    - name: Setup Micromamba
-      uses: mamba-org/setup-micromamba@v2
-      with:
-        environment-file: .devcontainer/environment.yml
-        generate-run-shell: true
-        cache-environment: true
-        cache-downloads: true
+      - name: Setup Micromamba
+        uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-file: .devcontainer/environment.yml
+          generate-run-shell: true
+          cache-environment: true
+          cache-downloads: true
 
-    - name: Run build_site.py
-      run: python build_site.py
-      shell: micromamba-shell {0}
+      - name: Myst build
+        run: myst build --html
+        shell: micromamba-shell {0}
 
-    - name: Upload artifact
-      uses: actions/upload-pages-artifact@v3
-      with:
-        path: 'nexus'
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: "_build/html"
 
   deploy:
     environment:
@@ -51,6 +51,6 @@ jobs:
     runs-on: ubuntu-latest
     needs: build
     steps:
-    - name: Deploy to GitHub Pages
-      id: deployment
-      uses: actions/deploy-pages@v4
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

@@ -1,7 +1,0 @@
-project:
-  id: scholar-nexus-home
-  main: index.md
-  title: Scholar Nexus
-site:
-  template: article-theme
-version: 1
