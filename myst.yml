@@ -9,6 +9,19 @@ project:
   toc:
   - title: Welcome
     file: index.md
+  - title: Who We Are
+    file: who-we-are.md
+  - title: Submission Guidelines
+    file: submission-guidelines.md
 
 site:
   template: book-theme
+  nav:
+    - title: Welcome
+      url: /index
+    - title: Who We Are
+      url: /who-we-are
+    - title: Submit
+      url: /submission-guidelines
+  options:
+    hide_toc: true
