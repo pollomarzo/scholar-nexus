@@ -1,5 +1,6 @@
 version: 1
-
+extends:
+- nexus.yml
 project:
   id: scholar-nexus-home
   title: Scholar Nexus
@@ -12,12 +13,12 @@ project:
   - title: Impact Scholars Program
     file: impact-scholars.md
     children:
-      - title: 2025 Edition
-        file: impact-scholars-2025.md
-      - title: 2024 Edition
-        file: impact-scholars-2024.md
-      - title: 2023 Edition
-        file: impact-scholars-2023.md
+    - title: 2025 Edition
+      file: impact-scholars-2025.md
+    - title: 2024 Edition
+      file: impact-scholars-2024.md
+    - title: 2023 Edition
+      file: impact-scholars-2023.md
   - title: Who We Are
     file: who-we-are.md
   - title: Submission Guidelines
@@ -26,9 +27,9 @@ project:
 site:
   template: book-theme
   nav:
-    - title: Welcome
-      url: /index
-    - title: Who We Are
-      url: /who-we-are
-    - title: Submit
-      url: /submission-guidelines
+  - title: Welcome
+    url: /index
+  - title: Who We Are
+    url: /who-we-are
+  - title: Submit
+    url: /submission-guidelines

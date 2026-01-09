@@ -1,0 +1,23 @@
+version: 1
+
+project:
+  id: scholar-nexus-home
+  title: Scholar Nexus
+  # open_access: true
+  # license:
+  #   content: CC-BY-4.0
+  #   code: Apache-2.0
+
+site:
+  template: book-theme
+  nav:
+  - title: Welcome
+    url: /index
+  - title: Who We Are
+    url: /who-we-are
+  - title: Submit
+    url: /submission-guidelines
+  options:
+    logo: https://raw.githubusercontent.com/pollomarzo/scholar-nexus/main/logos/logo.png
+    logo_dark: https://raw.githubusercontent.com/pollomarzo/scholar-nexus/main/logos/logo.png
+    logo_url: https://pollomarzo.github.io/scholar-nexus/
