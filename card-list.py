@@ -87,14 +87,34 @@ def render_paper(name: str):
 
 def render_papers(pool):
     with open("papers.txt") as f:
-        body = f.read()
+        lines = f.read().splitlines()
 
-    return [c for c in pool.map(render_paper, body.splitlines()) if c is not None]
+    parsed_papers = []
+    current_year = None
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith('#'):
+            current_year = line[1:].strip()
+        else:
+            parsed_papers.append((line, current_year))
+
+    names = [p[0] for p in parsed_papers]
+    cards = list(pool.map(render_paper, names))
+
+    results = []
+    for (name, year), card in zip(parsed_papers, cards):
+        if card is not None:
+            results.append({"year": year, "card": card})
+
+    return results
 
 
 def run_directive(name, data):
     assert name == "paper-cards"
-    return [{"type": "paper-cards", "children": []}]
+    subset = data.get("options", {}).get("subset")
+    return [{"type": "paper-cards", "subset": subset, "children": []}]
 
 
 def run_transform(name, data):
@@ -103,10 +123,16 @@ def run_transform(name, data):
         cookbook_nodes = find_all_by_type(data, "paper-cards")
 
         # In-place mutate the AST to replace cookbook nodes with card grids
-        children = render_papers(pool)
+        all_papers = render_papers(pool)
 
         # Mutate our cookbook nodes in-place
         for node in cookbook_nodes:
+            subset = node.get("subset")
+            children = [
+                p["card"]
+                for p in all_papers
+                if subset is None or str(p["year"]) == str(subset)
+            ]
             node.clear()
             node.update(grid([1, 1, 2, 3], children))
             node["children"] = children
@@ -117,6 +143,9 @@ def run_transform(name, data):
 paperGalleryDirective = {
     "name": "paper-cards",
     "doc": "An example directive for embedding a Pythia cookbook gallery.",
+    "options": {
+        "subset": {"type": "string"},
+    },
 }
 paperGalleryTransform = {
     "stage": "document",

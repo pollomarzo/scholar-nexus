@@ -9,4 +9,6 @@ options:
 
 Featured research from scholars participating in our 2024 program.
 
-::: {paper-cards} :::
+::: {paper-cards}
+:subset: 2024
+:::

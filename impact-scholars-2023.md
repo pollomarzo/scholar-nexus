@@ -9,4 +9,6 @@ options:
 
 Featured research from scholars participating in our 2023 program.
 
-::: {paper-cards} :::
+::: {paper-cards}
+:subset: 2023
+:::

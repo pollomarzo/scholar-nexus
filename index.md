@@ -15,5 +15,3 @@ Learn more [about our mission and team](./who-we-are.md), or review our [submiss
 ## Navigation
 
 Use the sidebar to browse all papers in this collection. Each paper includes full content, citations, and author information.
-
-::: {paper-cards} :::
