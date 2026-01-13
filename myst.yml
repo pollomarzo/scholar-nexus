@@ -8,7 +8,7 @@ project:
   - type: executable
     path: card-list.py
   toc:
-  - title: Welcome
+  - title: Home
     file: index.md
   - title: Impact Scholars Program
     file: impact-scholars.md
@@ -27,7 +27,7 @@ project:
 site:
   template: book-theme
   nav:
-  - title: Welcome
+  - title: Home
     url: /index
   - title: Who We Are
     url: /who-we-are
