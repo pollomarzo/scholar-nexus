@@ -3,3 +3,6 @@ oceanic-oscillations-congo
 
 # 2024
 ecco-tides-maria
+
+# 2023
+burned-area-argentina-patagonia
