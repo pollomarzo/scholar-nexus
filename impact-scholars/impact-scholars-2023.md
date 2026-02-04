@@ -1,8 +1,6 @@
 ---
 title: Impact Scholars Program - 2023 Edition
 description: Research publications from the 2023 Impact Scholars Program
-options:
-  hide_outline: true
 ---
 
 # Impact Scholars Program - 2023 Edition
