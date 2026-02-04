@@ -27,6 +27,13 @@ project:
     file: pages/who-we-are.md
   - title: Submission Guidelines
     file: pages/submission-guidelines.md
+  - title: Tutorials
+    file: pages/tutorials.md
+    children:
+    - title: MyST - A Deeper Dive
+      file: pages/tutorials/myst-deeper.md
+    - title: Conda/Mamba Tutorial
+      file: pages/tutorials/conda-tutorial.md
 
 site:
   template: book-theme
