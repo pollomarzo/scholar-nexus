@@ -4,15 +4,24 @@ Companion to `create-submission-target.sh`. Covers the design context and surrou
 
 ## Overview
 
-Authors work in their own public GitHub repositories (created from a template) and submit via a script that opens a PR against a private review target repo in `impact-scholars/`. Reviewers see a preview deployment per PR; merging to `main` publishes to GitHub Pages.
+Authors work in their own public GitHub repositories (created from a template) and submit via a script that opens a PR against a private review target repo in `impact-scholars/`. Collaborator access is added in stages: reviewers after the first preview deploys, authors only after review completes. Merging to `main` publishes to GitHub Pages.
 
 ```
-┌─────────────┐    ┌──────────────┐    ┌──────────────┐    ┌──────────┐    ┌─────────┐
-│  Template   │───▶│ Author repo  │───▶│ Script opens │───▶│ Review + │───▶│  Merge  │
-│ (main/bare) │    │ (from tmpl)  │    │  PR against  │    │  preview │    │ deploys │
-│             │    │              │    │ review target│    │          │    │ to Pages│
-└─────────────┘    └──────────────┘    └──────────────┘    └──────────┘    └─────────┘
+┌─────────────┐    ┌──────────────┐    ┌──────────┐    ┌──────────────┐    ┌──────────────┐    ┌─────────┐
+│  Template   │───▶│ Author repo  │───▶│  create  │───▶│add-reviewers │───▶│promote-authrs│───▶│  Merge  │
+│ (main/bare) │    │ (from tmpl)  │    │  + PR    │    │ (after first │    │  (after      │    │ deploys │
+│             │    │              │    │ (no ACL) │    │   preview)   │    │   review)    │    │ to Pages│
+└─────────────┘    └──────────────┘    └──────────┘    └──────────────┘    └──────────────┘    └─────────┘
 ```
+
+The script exposes four subcommands, each idempotent and gated by an interactive confirm (`--yes` to skip):
+
+| Subcommand | Purpose | When to run |
+|---|---|---|
+| `create <author-url> [name]` | Create target repo, set secrets, seed `main`, build `review`, open PR | At submission time |
+| `add-reviewers <target> <user>...` | Invite reviewers as `push` collaborators | After the first preview deploys |
+| `promote-authors <target> <author-url>` | Invite author repo contributors as `push` | After review concludes |
+| `resync-author <target> <author-url> --force` | Force-push fresh author content onto `review` | Only when the author needs to push updates mid-review (footgun: wipes existing review commits) |
 
 ## Repository Roles
 
@@ -26,6 +35,7 @@ Forked via GitHub's "Use this template" button from `main`. **Must be public** �
 ### Review target repo (created by the script)
 - `main`: single "startpoint" commit derived from `bare` — no template history
 - `review`: author's content applied on top of startpoint; this is the PR branch
+- No collaborators at creation. Access is granted in stages via `add-reviewers` and `promote-authors`.
 
 Private during review so reviewer comments and preview URLs aren't public.
 
@@ -65,21 +75,29 @@ Cloudflare credentials (`CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`) are set
 
 ## Review & publish flow
 
-- PR diff shows author additions vs bare skeleton (workflow differences are expected)
-- Automatic preview deployment on every PR update, URL posted as a sticky comment
-- Authors have write access to `review` and can push fixes
-- Merging the PR to `main` triggers deployment to GitHub Pages — no tag required
+1. **Submission** (`create`): repo created private, secrets set, `main` seeded from `bare`, `review` built from author content, PR opened. No collaborators yet — preview will deploy from the workflow on the bare-derived branch using injected secrets.
+2. **First preview** lands on Cloudflare Pages, URL posted as a sticky PR comment.
+3. **Reviewer onboarding** (`add-reviewers`): invite reviewers with `push` so they can comment, edit, and push fixes to `review`.
+4. **Author updates mid-review** (optional, `resync-author --force`): force-push refreshed author content onto `review`. Wipes any review-side commits, hence the explicit `--force` and confirm prompt.
+5. **Author onboarding** (`promote-authors`): once review is done, invite author repo contributors with `push` so they can publish errata and tag future versions.
+6. **Merge** to `main` triggers GitHub Pages deployment — no tag required.
+7. **Tag** → Zenodo archive (TODO).
+
+The PR diff shows author additions vs bare skeleton; workflow differences (author repo's `validate.yml`/`deploy.yml` replaced by `bare`'s `publish.yml`) are expected.
 
 ## Security notes
 
 1. Public author repos only (enforced by the script) — required for cross-repo ops
 2. Review targets are private during review
-3. Contributors get `push`, not admin, on targets
-4. `bare` contains no credentials; secrets are injected per-repo at creation time
+3. **Staged access**: no collaborators at creation; reviewers added with `push` after first preview; authors added with `push` only after review completes
+4. **Secret exposure caveat**: any collaborator who can push to a branch a workflow runs on can read repo secrets via that workflow. Accepted risk — the only secrets stored are scoped Cloudflare Pages credentials. If that ever changes, gate Cloudflare deploys behind a protected Environment with required reviewers.
+5. `bare` contains no credentials; secrets are injected per-repo at creation time
 
 ## Future enhancements
 
+- [ ] Tag-driven Zenodo archival
 - [ ] Support private author repos (requires a bot collaborator invitation)
 - [ ] Auto-detect GitHub usernames from `myst.yml` if schema supports it
 - [ ] Webhook/GitHub Action version of script for self-service submission
 - [ ] Archive/close target repos after publication
+- [ ] Move Cloudflare deploys to a protected Environment if the secret blast radius widens

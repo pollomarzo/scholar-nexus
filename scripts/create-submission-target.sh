@@ -1,249 +1,374 @@
 #!/bin/bash
-set -e
+set -eo pipefail
 
-# Impact Scholars Submission Target Creator
-# Creates a target repo for PR review and opens the PR
+# Impact Scholars Submission Manager
+#
+# Subcommands:
+#   create <author-repo-url> [target-name]
+#       Create review target repo, set secrets, seed main, build review branch, open PR.
+#       Idempotent: re-running on an existing target skips already-done steps.
+#
+#   add-reviewers <target-name> <user>...
+#       Invite reviewers as push collaborators on target repo.
+#
+#   promote-authors <target-name> <author-repo-url>
+#       Invite author repo contributors as push collaborators on target.
+#
+#   resync-author <target-name> <author-repo-url> --force
+#       Force-push fresh author content onto review branch. Wipes any existing review commits.
+#
+# Common options:
+#   --yes / -y    Skip confirmation prompt (required for non-TTY)
+#   --help / -h   Show this help
 
 export GH_PAGER=cat
 
-DRY_RUN=false
+ORG="pollomarzo"
+TEMPLATE_REPO="impact-scholars/isp-micropublication-template"
+
+# ---------- helpers ----------
 
 usage() {
-    echo "Usage: $0 [--dry-run] <author-repo-url> [target-repo-name]"
-    echo ""
-    echo "Arguments:"
-    echo "  author-repo-url:    Full URL to author's repo (e.g., https://github.com/pollomarzo/paper-name)"
-    echo "  target-repo-name:   Name for new repo in impact-scholars/ (auto-generated if omitted)"
-    echo ""
-    echo "Options:"
-    echo "  --dry-run           Show what would be done without making changes"
+    sed -n '4,22p' "$0" | sed 's/^# \{0,1\}//'
     exit 1
 }
 
-# Parse arguments
-if [ "$1" == "--dry-run" ]; then
-    DRY_RUN=true
-    shift
-fi
-
-if [ $# -lt 1 ]; then
-    usage
-fi
-
-AUTHOR_REPO_URL="$1"
-TARGET_NAME="${2:-}"
-TEMPLATE_REPO="impact-scholars/isp-micropublication-template"
-ORG="pollomarzo"
-
-# Parse author info from URL
-# Handle both https://github.com/USER/REPO and git@github.com:USER/REPO.git
-if [[ "$AUTHOR_REPO_URL" =~ github\.com[/:]([^/]+)/([^/\.]+) ]]; then
-    AUTHOR_USER="${BASH_REMATCH[1]}"
-    AUTHOR_REPO="${BASH_REMATCH[2]}"
-else
-    echo "Error: Could not parse GitHub URL: $AUTHOR_REPO_URL"
-    exit 1
-fi
-
-# Check gh CLI is installed and authenticated
-if ! command -v gh &> /dev/null; then
-    echo "Error: gh CLI not found. Install from https://cli.github.com/"
-    exit 1
-fi
-
-gh auth status > /dev/null 2>&1 || { echo "Error: gh CLI not authenticated. Run 'gh auth login'"; exit 1; }
-
-# Check required secrets are in environment (private repos don't inherit org secrets on free plan)
-if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
-    echo "Error: CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID must be set in environment"
-    echo "  export CLOUDFLARE_API_TOKEN=..."
-    echo "  export CLOUDFLARE_ACCOUNT_ID=..."
-    exit 1
-fi
-
-# Verify author repo exists, is accessible, and is public
-echo "=== Checking author repository ==="
-REPO_INFO=$(gh api repos/$AUTHOR_USER/$AUTHOR_REPO 2>/dev/null) || {
-    echo "Error: Repository not found or not accessible: $AUTHOR_USER/$AUTHOR_REPO"
-    echo "Make sure:"
-    echo "  - The URL is correct"
-    echo "  - The repository exists"
-    echo "  - The repository is public (required for cross-repo PRs)"
-    exit 1
+confirm() {
+    if [ "$ASSUME_YES" = "true" ]; then
+        return 0
+    fi
+    if [ ! -t 0 ]; then
+        echo "Error: not a TTY and --yes not set. Re-run with --yes." >&2
+        exit 1
+    fi
+    read -rp "Proceed? [y/N] " ans
+    [[ "$ans" =~ ^[Yy] ]]
 }
 
-REPO_VISIBILITY=$(echo "$REPO_INFO" | jq -r '.visibility // .private')
-if [ "$REPO_VISIBILITY" == "true" ] || [ "$REPO_VISIBILITY" == "private" ]; then
-    echo "Error: Repository $AUTHOR_USER/$AUTHOR_REPO is private"
-    echo "Submissions must be from public repositories."
-    echo "Please make the repository public or contact the organizing team."
-    exit 1
-fi
+require_gh_auth() {
+    command -v gh &>/dev/null || { echo "Error: gh CLI not found. Install from https://cli.github.com/"; exit 1; }
+    gh auth status &>/dev/null || { echo "Error: gh CLI not authenticated. Run 'gh auth login'"; exit 1; }
+}
 
-echo "✓ Repository exists, is accessible, and is public"
+require_org_membership() {
+    local actor="$1"
+    local role
+    role=$(gh api "orgs/$ORG/memberships/$actor" --jq .role 2>/dev/null) || {
+        echo "Error: $actor is not a member of org: $ORG"; exit 1;
+    }
+    echo "  ✓ org membership: $role"
+}
 
-# Auto-generate target name if not provided
-if [ -z "$TARGET_NAME" ]; then
-    # Format: author-repo-timestamp
-    TIMESTAMP=$(date +%Y%m%d-%H%M%S)
-    TARGET_NAME="${AUTHOR_REPO}-${TIMESTAMP}"
-fi
+repo_exists()   { gh api "repos/$1" &>/dev/null; }
+branch_exists() { gh api "repos/$1/branches/$2" &>/dev/null; }
+pr_exists()     { [ "$(gh pr list --repo "$1" --head "$2" --json number --jq length 2>/dev/null)" -gt 0 ]; }
 
-TARGET_REPO="$ORG/$TARGET_NAME"
-
-echo ""
-echo "=== Configuration ==="
-echo "Dry run: $DRY_RUN"
-echo "Author: $AUTHOR_USER/$AUTHOR_REPO"
-echo "Target: $TARGET_REPO"
-echo ""
-
-if [ "$DRY_RUN" = true ]; then
-    echo "=== DRY RUN MODE - No changes will be made ==="
-    echo ""
-    echo "Would execute:"
-    echo "  1. gh repo create $TARGET_REPO --private --description 'Review target for $AUTHOR_USER/$AUTHOR_REPO'"
-    echo "  2. gh secret set CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID on $TARGET_REPO"
-    echo "  3. gh api repos/$AUTHOR_USER/$AUTHOR_REPO/contributors | invite each to $TARGET_REPO"
-    echo "  4. git clone --branch bare --single-branch git@github.com:$TEMPLATE_REPO.git <temp-dir>"
-    echo "  5. cd <temp-dir> && git checkout --orphan new-main && git commit -m 'startpoint'"
-    echo "  6. git push git@github.com:$TARGET_REPO.git new-main:main --force"
-    echo "  7. Create review branch: checkout author content, squash onto startpoint"
-    echo "  8. Open PR: review → main"
-    echo ""
-    echo "=== Prerequisites check ==="
-    if command -v gh &> /dev/null; then
-        echo "✓ gh CLI installed"
-        gh auth status 2>&1 | head -3 || echo "✗ gh CLI not authenticated"
+parse_github_url() {
+    # Sets AUTHOR_USER, AUTHOR_REPO from a GitHub URL.
+    if [[ "$1" =~ github\.com[/:]([^/]+)/([^/\.]+) ]]; then
+        AUTHOR_USER="${BASH_REMATCH[1]}"
+        AUTHOR_REPO="${BASH_REMATCH[2]}"
     else
-        echo "✗ gh CLI not found"
+        echo "Error: could not parse GitHub URL: $1"; exit 1;
     fi
-    if command -v git &> /dev/null; then
-        echo "✓ git installed"
-    else
-        echo "✗ git not found"
-    fi
-    echo ""
-    echo "PR would be: review branch → impact-scholars/$TARGET_NAME:main"
-    exit 0
-fi
-
-echo "=== Step 1: Create target repo ==="
-gh repo create "$TARGET_REPO" \
-    --private \
-    --description "Review target for $AUTHOR_USER/$AUTHOR_REPO" \
-    || { echo "Failed to create repo (may already exist)"; exit 1; }
-
-echo ""
-echo "=== Step 2: Set Cloudflare secrets ==="
-gh secret set CLOUDFLARE_API_TOKEN --repo "$TARGET_REPO" --body "$CLOUDFLARE_API_TOKEN" \
-    && echo "  ✓ CLOUDFLARE_API_TOKEN set" \
-    || { echo "Failed to set CLOUDFLARE_API_TOKEN"; exit 1; }
-gh secret set CLOUDFLARE_ACCOUNT_ID --repo "$TARGET_REPO" --body "$CLOUDFLARE_ACCOUNT_ID" \
-    && echo "  ✓ CLOUDFLARE_ACCOUNT_ID set" \
-    || { echo "Failed to set CLOUDFLARE_ACCOUNT_ID"; exit 1; }
-
-echo ""
-echo "=== Step 3: Grant contributors write access ==="
-CONTRIBUTORS=$(gh api repos/$AUTHOR_USER/$AUTHOR_REPO/contributors --jq '.[].login' 2>/dev/null || true)
-if [ -z "$CONTRIBUTORS" ]; then
-    echo "⚠️  No contributors found, at least adding author ($AUTHOR_USER)..."
-    CONTRIBUTORS="$AUTHOR_USER"
-fi
-
-echo "$CONTRIBUTORS" | while read -r username; do
-    [ -z "$username" ] && continue
-    # Skip the owner of the target repo — inviting the owner as collaborator returns 422
-    if [ "$username" = "$ORG" ]; then
-        echo "  Skipping $username (owner of $TARGET_REPO)"
-        continue
-    fi
-    echo "  Inviting $username..."
-    gh api repos/$TARGET_REPO/collaborators/$username \
-        --method PUT \
-        --field permission=push \
-        2>/dev/null && echo "    ✓ Invited" || echo "    ⚠️  Failed (may already be collaborator)"
-done
-
-echo ""
-echo "=== Step 4: Initialize main with single startpoint commit ==="
-TEMP_DIR=$(mktemp -d)
-trap "rm -rf $TEMP_DIR" EXIT
-
-git clone --branch bare --single-branch "git@github.com:$TEMPLATE_REPO.git" "$TEMP_DIR"
-cd "$TEMP_DIR"
-
-# Create orphan branch with single commit
-git checkout --orphan new-main
-git add -A
-git commit -m "startpoint" || { echo "Failed to create startpoint commit"; exit 1; }
-
-# Remove origin and add new target
-git remote remove origin
-git remote add origin "git@github.com:$TARGET_REPO.git"
-git push origin new-main:main --force
-
-echo ""
-echo "=== Step 5: Create review branch with author content ==="
-# Fetch the main branch we just pushed from origin
-echo "Fetching origin/main..."
-git fetch origin main
-
-# Add author repo as remote and fetch
-git remote add author "https://github.com/$AUTHOR_USER/$AUTHOR_REPO.git"
-echo "Fetching author/main..."
-git fetch author main
-
-# Create review branch from origin/main (bare skeleton)
-git checkout -b review origin/main
-
-# Remove bare skeleton files and replace with author content
-git rm -rf .
-git checkout author/main -- .
-
-# Strip author's workflows and restore bare's publish.yml
-# (author repo has validate.yml+deploy.yml; review target needs publish.yml)
-rm -rf .github/workflows
-git checkout origin/main -- .github/workflows/publish.yml
-
-# Commit author content on top of bare history
-git add -A
-git commit -m "Submission from $AUTHOR_USER/$AUTHOR_REPO
-
-Original repository: $AUTHOR_REPO_URL" || {
-    echo "⚠️  No changes to commit (author content identical to bare)"
-    exit 1
 }
 
-git push origin review
+CLEANUP_DIRS=()
+cleanup() {
+    for d in "${CLEANUP_DIRS[@]}"; do
+        [ -d "$d" ] && rm -rf "$d"
+    done
+}
+trap cleanup EXIT
 
-echo ""
-echo "=== Step 6: Create PR ==="
-PR_RESULT=$(gh api repos/$TARGET_REPO/pulls \
-    --method POST \
-    --field title="Submission: $AUTHOR_REPO" \
-    --field head="review" \
-    --field base="main" \
-    --field body="Submitted by @$AUTHOR_USER
+make_temp_dir() {
+    local d
+    d=$(mktemp -d)
+    CLEANUP_DIRS+=("$d")
+    echo "$d"
+}
 
-Original repository: $AUTHOR_REPO_URL
+# ---------- subcommand: create ----------
+
+cmd_create() {
+    local author_url="${1:-}"
+    local target_name="${2:-}"
+    [ -n "$author_url" ] || { echo "Error: <author-repo-url> required"; usage; }
+
+    parse_github_url "$author_url"
+
+    if [ -z "$target_name" ]; then
+        target_name="${AUTHOR_REPO}-$(date +%Y%m%d-%H%M%S)"
+    fi
+    local target_repo="$ORG/$target_name"
+
+    # ----- preflight -----
+    echo "=== Preflight: create $target_repo ==="
+
+    [ -n "$CLOUDFLARE_API_TOKEN" ] || { echo "Error: CLOUDFLARE_API_TOKEN unset in environment"; exit 1; }
+    [ -n "$CLOUDFLARE_ACCOUNT_ID" ] || { echo "Error: CLOUDFLARE_ACCOUNT_ID unset in environment"; exit 1; }
+    echo "  ✓ cloudflare env vars set"
+
+    require_gh_auth
+    local actor
+    actor=$(gh api user --jq .login)
+    echo "  ✓ gh authenticated as $actor"
+    # require_org_membership "$actor"
+
+    local repo_info
+    repo_info=$(gh api "repos/$AUTHOR_USER/$AUTHOR_REPO" 2>/dev/null) || {
+        echo "Error: author repo not accessible: $AUTHOR_USER/$AUTHOR_REPO (must exist and be public)"
+        exit 1
+    }
+    local visibility
+    visibility=$(echo "$repo_info" | jq -r 'if .private then "private" else "public" end')
+    [ "$visibility" = "public" ] || { echo "Error: author repo $AUTHOR_USER/$AUTHOR_REPO is $visibility (must be public)"; exit 1; }
+    echo "  ✓ author repo $AUTHOR_USER/$AUTHOR_REPO is public"
+
+    local target_exists=false main_seeded=false review_exists=false pr_open=false
+    if repo_exists "$target_repo"; then
+        target_exists=true
+        branch_exists "$target_repo" main   && main_seeded=true
+        branch_exists "$target_repo" review && review_exists=true
+        [ "$review_exists" = "true" ] && pr_exists "$target_repo" review && pr_open=true
+    fi
+
+    # ----- plan -----
+    echo ""
+    echo "=== Plan ==="
+    if [ "$target_exists" = "false" ]; then echo "  ○ target repo: does not exist → will create (private)"; else echo "  ✓ target repo: exists"; fi
+    echo "  ○ secrets: will set CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID (overwrite)"
+    if [ "$main_seeded" = "false" ];   then echo "  ○ main: will seed from template/bare";              else echo "  ✓ main: already seeded (skip)"; fi
+    if [ "$review_exists" = "false" ]; then echo "  ○ review: will create from author/main";            else echo "  ✓ review: exists (skip — use resync-author to refresh)"; fi
+    if [ "$pr_open" = "false" ];       then echo "  ○ PR: will open review → main";                     else echo "  ✓ PR: already open (skip)"; fi
+    echo ""
+
+    confirm || { echo "Aborted."; exit 0; }
+
+    # ----- execute -----
+    if [ "$target_exists" = "false" ]; then
+        echo "=== Creating $target_repo ==="
+        gh repo create "$target_repo" --private --description "Review target for $AUTHOR_USER/$AUTHOR_REPO"
+    fi
+
+    echo "=== Setting secrets ==="
+    gh secret set CLOUDFLARE_API_TOKEN  --repo "$target_repo" --body "$CLOUDFLARE_API_TOKEN"  >/dev/null && echo "  ✓ CLOUDFLARE_API_TOKEN"
+    gh secret set CLOUDFLARE_ACCOUNT_ID --repo "$target_repo" --body "$CLOUDFLARE_ACCOUNT_ID" >/dev/null && echo "  ✓ CLOUDFLARE_ACCOUNT_ID"
+
+    if [ "$main_seeded" = "false" ] || [ "$review_exists" = "false" ]; then
+        local tmp
+        tmp=$(make_temp_dir)
+
+        if [ "$main_seeded" = "false" ]; then
+            echo "=== Seeding main from template/bare ==="
+            git clone --branch bare --single-branch "git@github.com:$TEMPLATE_REPO.git" "$tmp"
+            (
+                cd "$tmp"
+                git checkout --orphan new-main
+                git add -A
+                git commit -m "startpoint"
+                git remote remove origin
+                git remote add origin "git@github.com:$target_repo.git"
+                git push origin new-main:main
+            )
+        fi
+
+        if [ "$review_exists" = "false" ]; then
+            echo "=== Building review branch ==="
+            if [ "$main_seeded" = "true" ]; then
+                # tmp is empty (didn't seed); clone target fresh
+                rmdir "$tmp"
+                git clone "git@github.com:$target_repo.git" "$tmp"
+                CLEANUP_DIRS+=("$tmp")
+            fi
+            (
+                cd "$tmp"
+                git fetch origin main
+                git remote add author "https://github.com/$AUTHOR_USER/$AUTHOR_REPO.git" 2>/dev/null || true
+                git fetch author main
+                git checkout -B review origin/main
+                git rm -rf .
+                git checkout author/main -- .
+                rm -rf .github/workflows
+                git checkout origin/main -- .github/workflows/publish.yml
+                git add -A
+                git commit -m "Submission from $AUTHOR_USER/$AUTHOR_REPO
+
+Original repository: $author_url"
+                git push origin review
+            )
+        fi
+    fi
+
+    if [ "$pr_open" = "false" ]; then
+        echo "=== Opening PR ==="
+        gh api "repos/$target_repo/pulls" \
+            --method POST \
+            --field title="Submission: $AUTHOR_REPO" \
+            --field head="review" \
+            --field base="main" \
+            --field body="Submitted by @$AUTHOR_USER
+
+Original repository: $author_url
 
 ---
 
-*This PR was created via the Impact Scholars submission workflow.*" 2>&1) || {
-        echo "ERROR: Failed to create PR"
-        echo "$PR_RESULT"
-        exit 1
-    }
+*This PR was created via the Impact Scholars submission workflow.*" \
+            --jq '"  ✓ PR: " + .html_url'
+    fi
 
-echo "✓ PR created successfully!"
-PR_URL=$(echo "$PR_RESULT" | jq -r '.html_url // empty' 2>/dev/null)
-[ -n "$PR_URL" ] && echo "URL: $PR_URL"
+    echo ""
+    echo "Done: https://github.com/$target_repo"
+}
 
-echo ""
-echo "=== Summary ==="
-echo "Target repo: https://github.com/$TARGET_REPO"
-echo "Author repo: $AUTHOR_REPO_URL"
-echo "Contributors invited:"
-echo "$CONTRIBUTORS" | sed 's/^/  - /'
-[ -n "$PR_URL" ] && echo "PR: $PR_URL"
+# ---------- subcommand: add-reviewers ----------
+
+cmd_add_reviewers() {
+    local target_name="${1:-}"
+    [ -n "$target_name" ] || { echo "Error: <target-name> required"; usage; }
+    shift
+    local reviewers=("$@")
+    [ ${#reviewers[@]} -gt 0 ] || { echo "Error: at least one reviewer required"; usage; }
+
+    local target_repo="$ORG/$target_name"
+
+    echo "=== Preflight: add-reviewers $target_repo ==="
+    require_gh_auth
+    repo_exists "$target_repo" || { echo "Error: $target_repo does not exist"; exit 1; }
+    echo "  ✓ target repo exists"
+
+    echo ""
+    echo "=== Plan ==="
+    for u in "${reviewers[@]}"; do echo "  ○ invite $u as reviewer (permission=push)"; done
+    echo ""
+    confirm || { echo "Aborted."; exit 0; }
+
+    for u in "${reviewers[@]}"; do
+        if gh api "repos/$target_repo/collaborators/$u" --method PUT --field permission=push >/dev/null 2>&1; then
+            echo "  ✓ $u (push)"
+        else
+            echo "  ⚠️  $u — failed (may already be collaborator at this level)"
+        fi
+    done
+}
+
+# ---------- subcommand: promote-authors ----------
+
+cmd_promote_authors() {
+    local target_name="${1:-}"
+    local author_url="${2:-}"
+    [ -n "$target_name" ] || { echo "Error: <target-name> required"; usage; }
+    [ -n "$author_url" ] || { echo "Error: <author-repo-url> required"; usage; }
+
+    local target_repo="$ORG/$target_name"
+    parse_github_url "$author_url"
+
+    echo "=== Preflight: promote-authors $target_repo ==="
+    require_gh_auth
+    repo_exists "$target_repo" || { echo "Error: $target_repo does not exist"; exit 1; }
+    echo "  ✓ target repo exists"
+
+    local contributors
+    contributors=$(gh api "repos/$AUTHOR_USER/$AUTHOR_REPO/contributors" --jq '.[].login' 2>/dev/null || true)
+    if [ -z "$contributors" ]; then
+        contributors="$AUTHOR_USER"
+        echo "  ⚠️  no contributors API result; falling back to author user $AUTHOR_USER"
+    fi
+
+    echo ""
+    echo "=== Plan ==="
+    while IFS= read -r u; do
+        [ -z "$u" ] && continue
+        echo "  ○ invite $u as author (permission=push)"
+    done <<< "$contributors"
+    echo ""
+    confirm || { echo "Aborted."; exit 0; }
+
+    while IFS= read -r u; do
+        [ -z "$u" ] && continue
+        if gh api "repos/$target_repo/collaborators/$u" --method PUT --field permission=push >/dev/null 2>&1; then
+            echo "  ✓ $u (push)"
+        else
+            echo "  ⚠️  $u — failed"
+        fi
+    done <<< "$contributors"
+}
+
+# ---------- subcommand: resync-author ----------
+
+cmd_resync_author() {
+    local target_name="${1:-}"
+    local author_url="${2:-}"
+    [ -n "$target_name" ] || { echo "Error: <target-name> required"; usage; }
+    [ -n "$author_url" ] || { echo "Error: <author-repo-url> required"; usage; }
+    [ "$FORCE" = "true" ] || { echo "Error: resync-author requires --force (force-pushes review, wipes existing review commits)"; exit 1; }
+
+    local target_repo="$ORG/$target_name"
+    parse_github_url "$author_url"
+
+    echo "=== Preflight: resync-author $target_repo ==="
+    require_gh_auth
+    repo_exists "$target_repo" || { echo "Error: $target_repo does not exist"; exit 1; }
+    branch_exists "$target_repo" main || { echo "Error: $target_repo has no main branch (run create first)"; exit 1; }
+    echo "  ✓ target repo + main exist"
+
+    echo ""
+    echo "=== Plan ==="
+    echo "  ⚠️  WILL FORCE-PUSH review branch — wipes any existing commits on review"
+    echo "  ○ rebuild review from $AUTHOR_USER/$AUTHOR_REPO@main on top of $target_repo@main"
+    echo ""
+    confirm || { echo "Aborted."; exit 0; }
+
+    local tmp
+    tmp=$(make_temp_dir)
+    rmdir "$tmp"
+    git clone "git@github.com:$target_repo.git" "$tmp"
+    CLEANUP_DIRS+=("$tmp")
+    (
+        cd "$tmp"
+        git fetch origin main
+        git remote add author "https://github.com/$AUTHOR_USER/$AUTHOR_REPO.git"
+        git fetch author main
+        git checkout -B review origin/main
+        git rm -rf .
+        git checkout author/main -- .
+        rm -rf .github/workflows
+        git checkout origin/main -- .github/workflows/publish.yml
+        git add -A
+        git commit -m "Resync from $AUTHOR_USER/$AUTHOR_REPO
+
+Original repository: $author_url"
+        git push --force origin review
+    )
+
+    echo ""
+    echo "Done: https://github.com/$target_repo (review force-pushed)"
+}
+
+# ---------- arg parsing & dispatch ----------
+
+ASSUME_YES=false
+FORCE=false
+ARGS=()
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --yes|-y)   ASSUME_YES=true; shift ;;
+        --force)    FORCE=true; shift ;;
+        --help|-h)  usage ;;
+        *)          ARGS+=("$1"); shift ;;
+    esac
+done
+
+[ ${#ARGS[@]} -gt 0 ] || usage
+
+SUBCOMMAND="${ARGS[0]}"
+ARGS=("${ARGS[@]:1}")
+
+case "$SUBCOMMAND" in
+    create)          cmd_create          "${ARGS[@]}" ;;
+    add-reviewers)   cmd_add_reviewers   "${ARGS[@]}" ;;
+    promote-authors) cmd_promote_authors "${ARGS[@]}" ;;
+    resync-author)   cmd_resync_author   "${ARGS[@]}" ;;
+    *) echo "Unknown subcommand: $SUBCOMMAND" >&2; usage ;;
+esac
