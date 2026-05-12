@@ -17,6 +17,10 @@ set -eo pipefail
 #   resync-author <target-name> <author-repo-url> --force
 #       Force-push fresh author content onto review branch. Wipes any existing review commits.
 #
+#   apply-rulesets <target-name>
+#       Apply branch + tag rulesets + zenodo-publish environment to the target repo.
+#       Idempotent. Also runs automatically as the last step of `create`.
+#
 # Common options:
 #   --yes / -y    Skip confirmation prompt (required for non-TTY)
 #   --help / -h   Show this help
@@ -29,7 +33,7 @@ TEMPLATE_REPO="impact-scholars/isp-micropublication-template"
 # ---------- helpers ----------
 
 usage() {
-    sed -n '4,22p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '4,26p' "$0" | sed 's/^# \{0,1\}//'
     exit 1
 }
 
@@ -88,6 +92,106 @@ make_temp_dir() {
     echo "$d"
 }
 
+# Idempotent — looks up an existing ruleset by name, creates if absent.
+# $1 = target repo (owner/repo), $2 = ruleset JSON body.
+upsert_ruleset() {
+    local target_repo="$1"
+    local body="$2"
+    local name
+    name=$(echo "$body" | jq -r .name)
+    local existing output
+    if ! output=$(gh api "repos/$target_repo/rulesets" --jq ".[] | select(.name==\"$name\") | .id" 2>&1); then
+        echo "Error: could not list rulesets for $target_repo while checking '$name':" >&2
+        echo "$output" >&2
+        return 1
+    fi
+    existing="$output"
+    if [ -n "$existing" ]; then
+        echo "  ✓ ruleset '$name' already exists (id $existing); skipping"
+        return 0
+    fi
+    echo "$body" | gh api -X POST "repos/$target_repo/rulesets" --input - >/dev/null \
+        && echo "  ✓ created ruleset '$name'"
+}
+
+apply_rulesets_to_repo() {
+    local target_repo="$1"
+    local owner_type
+    owner_type=$(gh api "users/$ORG" --jq .type)
+
+    upsert_ruleset "$target_repo" "$(cat <<'EOF'
+{
+  "name": "protect-main",
+  "target": "branch",
+  "enforcement": "active",
+  "conditions": { "ref_name": { "include": ["refs/heads/main"], "exclude": [] } },
+  "rules": [
+    { "type": "pull_request",
+      "parameters": {
+        "required_approving_review_count": 0,
+        "require_code_owner_review": true,
+        "dismiss_stale_reviews_on_push": true,
+        "require_last_push_approval": false,
+        "required_review_thread_resolution": false
+      }
+    }
+  ]
+}
+EOF
+)"
+
+    local bypass team_id team_output
+    if [ "$owner_type" = "Organization" ]; then
+        if ! team_output=$(gh api "orgs/$ORG/teams/editors" --jq .id 2>&1); then
+            echo "Error: could not find @$ORG/editors team for tag ruleset bypass:" >&2
+            echo "$team_output" >&2
+            return 1
+        fi
+        team_id="$team_output"
+        if [[ ! "$team_id" =~ ^[0-9]+$ ]]; then
+            echo "Error: @$ORG/editors team id is not numeric: $team_id" >&2
+            return 1
+        fi
+        bypass="[{\"actor_id\":$team_id,\"actor_type\":\"Team\",\"bypass_mode\":\"always\"}]"
+    else
+        # Personal-account test repos cannot have org teams; allow repo admins
+        # to create/update/delete release tags so v* tags are not locked forever.
+        bypass='[{"actor_id":5,"actor_type":"RepositoryRole","bypass_mode":"always"}]'
+        echo "  ⚠️  $ORG is a personal account — v* tag bypass is repo admins, not @$ORG/editors"
+    fi
+    upsert_ruleset "$target_repo" "$(cat <<EOF
+{
+  "name": "editors-only-v-tags",
+  "target": "tag",
+  "enforcement": "active",
+  "conditions": { "ref_name": { "include": ["refs/tags/v*"], "exclude": [] } },
+  "rules": [
+    { "type": "creation" },
+    { "type": "update" },
+    { "type": "deletion" }
+  ],
+  "bypass_actors": $bypass
+}
+EOF
+)"
+
+    # zenodo-publish environment — gates the publish job to v* tag refs only.
+    gh api -X PUT "repos/$target_repo/environments/zenodo-publish" \
+        --field 'deployment_branch_policy[protected_branches]=false' \
+        --field 'deployment_branch_policy[custom_branch_policies]=true' \
+        >/dev/null
+    local existing_policy
+    existing_policy=$(gh api "repos/$target_repo/environments/zenodo-publish/deployment-branch-policies" \
+        --jq '.branch_policies[] | select(.name=="v*") | .id' 2>/dev/null || true)
+    if [ -n "$existing_policy" ]; then
+        echo "  ✓ zenodo-publish environment v* policy already exists; skipping"
+    else
+        gh api -X POST "repos/$target_repo/environments/zenodo-publish/deployment-branch-policies" \
+            --field 'name=v*' --field 'type=tag' >/dev/null
+        echo "  ✓ created zenodo-publish environment with v* tag policy"
+    fi
+}
+
 # ---------- subcommand: create ----------
 
 cmd_create() {
@@ -136,11 +240,12 @@ cmd_create() {
     # ----- plan -----
     echo ""
     echo "=== Plan ==="
-    if [ "$target_exists" = "false" ]; then echo "  ○ target repo: does not exist → will create (private)"; else echo "  ✓ target repo: exists"; fi
+    if [ "$target_exists" = "false" ]; then echo "  ○ target repo: does not exist → will create (public)"; else echo "  ✓ target repo: exists"; fi
     echo "  ○ secrets: will set CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID (overwrite)"
     if [ "$main_seeded" = "false" ];   then echo "  ○ main: will seed from template/bare";              else echo "  ✓ main: already seeded (skip)"; fi
     if [ "$review_exists" = "false" ]; then echo "  ○ review: will create from author/main";            else echo "  ✓ review: exists (skip — use resync-author to refresh)"; fi
     if [ "$pr_open" = "false" ];       then echo "  ○ PR: will open review → main";                     else echo "  ✓ PR: already open (skip)"; fi
+    echo "  ○ rulesets + env: protect-main (PR required, CODEOWNERS gates workflow/script changes) + editors-only-v-tags + zenodo-publish env (idempotent)"
     echo ""
 
     confirm || { echo "Aborted."; exit 0; }
@@ -148,7 +253,7 @@ cmd_create() {
     # ----- execute -----
     if [ "$target_exists" = "false" ]; then
         echo "=== Creating $target_repo ==="
-        gh repo create "$target_repo" --private --description "Review target for $AUTHOR_USER/$AUTHOR_REPO"
+        gh repo create "$target_repo" --public --description "Review target for $AUTHOR_USER/$AUTHOR_REPO"
     fi
 
     echo "=== Setting secrets ==="
@@ -190,7 +295,10 @@ cmd_create() {
                 git rm -rf .
                 git checkout author/main -- .
                 rm -rf .github/workflows
-                git checkout origin/main -- .github/workflows/publish.yml
+                # Restore editor-controlled GitHub metadata from bare/main so
+                # workflow hardening and CODEOWNERS survive the review merge.
+                git checkout origin/main -- .github/workflows
+                git checkout origin/main -- .github/CODEOWNERS
                 git add -A
                 git commit -m "Submission from $AUTHOR_USER/$AUTHOR_REPO
 
@@ -216,6 +324,9 @@ Original repository: $author_url
 *This PR was created via the Impact Scholars submission workflow.*" \
             --jq '"  ✓ PR: " + .html_url'
     fi
+
+    echo "=== Applying rulesets ==="
+    apply_rulesets_to_repo "$target_repo"
 
     echo ""
     echo "Done: https://github.com/$target_repo"
@@ -333,7 +444,10 @@ cmd_resync_author() {
         git rm -rf .
         git checkout author/main -- .
         rm -rf .github/workflows
-        git checkout origin/main -- .github/workflows/publish.yml
+        # Restore editor-controlled GitHub metadata from main so workflow
+        # hardening and CODEOWNERS survive the review merge.
+        git checkout origin/main -- .github/workflows
+        git checkout origin/main -- .github/CODEOWNERS
         git add -A
         git commit -m "Resync from $AUTHOR_USER/$AUTHOR_REPO
 
@@ -343,6 +457,31 @@ Original repository: $author_url"
 
     echo ""
     echo "Done: https://github.com/$target_repo (review force-pushed)"
+}
+
+# ---------- subcommand: apply-rulesets ----------
+
+cmd_apply_rulesets() {
+    local target_name="${1:-}"
+    [ -n "$target_name" ] || { echo "Error: <target-name> required"; usage; }
+    local target_repo="$ORG/$target_name"
+
+    echo "=== Preflight: apply-rulesets $target_repo ==="
+    require_gh_auth
+    repo_exists "$target_repo" || { echo "Error: $target_repo does not exist"; exit 1; }
+    echo "  ✓ target repo exists"
+
+    echo ""
+    echo "=== Plan ==="
+    echo "  ○ branch ruleset 'protect-main' on refs/heads/main (require PR; CODEOWNERS review only for workflow/script changes)"
+    echo "  ○ tag ruleset 'editors-only-v-tags' on refs/tags/v* (@$ORG/editors on org repos, repo admins on personal test repos)"
+    echo "  ○ 'zenodo-publish' deployment environment with v* tag policy"
+    echo "  (idempotent — existing rulesets/env are skipped if already configured)"
+    echo ""
+    confirm || { echo "Aborted."; exit 0; }
+
+    echo "=== Applying rulesets ==="
+    apply_rulesets_to_repo "$target_repo"
 }
 
 # ---------- arg parsing & dispatch ----------
@@ -370,5 +509,6 @@ case "$SUBCOMMAND" in
     add-reviewers)   cmd_add_reviewers   "${ARGS[@]}" ;;
     promote-authors) cmd_promote_authors "${ARGS[@]}" ;;
     resync-author)   cmd_resync_author   "${ARGS[@]}" ;;
+    apply-rulesets)  cmd_apply_rulesets  "${ARGS[@]}" ;;
     *) echo "Unknown subcommand: $SUBCOMMAND" >&2; usage ;;
 esac
