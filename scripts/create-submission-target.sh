@@ -67,6 +67,23 @@ repo_exists()   { gh api "repos/$1" &>/dev/null; }
 branch_exists() { gh api "repos/$1/branches/$2" &>/dev/null; }
 pr_exists()     { [ "$(gh pr list --repo "$1" --head "$2" --json number --jq length 2>/dev/null)" -gt 0 ]; }
 
+# Grant push without downgrading an existing role: PUT permission=push overwrites
+# the current role, so skip anyone already at write/admin. $1 = repo, $2 = user.
+ensure_push_collaborator() {
+    local target_repo="$1" user="$2" current
+    current=$(gh api "repos/$target_repo/collaborators/$user/permission" --jq .permission 2>/dev/null || true)
+    case "$current" in
+        admin|maintain|write)
+            echo "  ✓ $user already has '$current' (≥push); skipping to avoid downgrade"
+            return 0 ;;
+    esac
+    if gh api "repos/$target_repo/collaborators/$user" --method PUT --field permission=push >/dev/null 2>&1; then
+        echo "  ✓ $user (push)"
+    else
+        echo "  ⚠️  $user — failed (may already be collaborator at this level)"
+    fi
+}
+
 parse_github_url() {
     # Sets AUTHOR_USER, AUTHOR_REPO from a GitHub URL.
     if [[ "$1" =~ github\.com[/:]([^/]+)/([^/\.]+) ]]; then
@@ -355,11 +372,7 @@ cmd_add_reviewers() {
     confirm || { echo "Aborted."; exit 0; }
 
     for u in "${reviewers[@]}"; do
-        if gh api "repos/$target_repo/collaborators/$u" --method PUT --field permission=push >/dev/null 2>&1; then
-            echo "  ✓ $u (push)"
-        else
-            echo "  ⚠️  $u — failed (may already be collaborator at this level)"
-        fi
+        ensure_push_collaborator "$target_repo" "$u"
     done
 }
 
@@ -397,11 +410,7 @@ cmd_promote_authors() {
 
     while IFS= read -r u; do
         [ -z "$u" ] && continue
-        if gh api "repos/$target_repo/collaborators/$u" --method PUT --field permission=push >/dev/null 2>&1; then
-            echo "  ✓ $u (push)"
-        else
-            echo "  ⚠️  $u — failed"
-        fi
+        ensure_push_collaborator "$target_repo" "$u"
     done <<< "$contributors"
 }
 
