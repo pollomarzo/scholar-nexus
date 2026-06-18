@@ -7,6 +7,9 @@ set -eo pipefail
 #   create <author-repo-url> [target-name]
 #       Create review target repo, set secrets, seed main, build review branch, open PR.
 #       Idempotent: re-running on an existing target skips already-done steps.
+#       Author URL may be GitHub or a plain-git host (e.g. GIN/Gitea); for a
+#       non-GitHub source, [target-name] is required and --source-ref selects
+#       the branch to ingest (GIN default branch is 'master').
 #
 #   add-reviewers <target-name> <user>...
 #       Invite reviewers as push collaborators on target repo.
@@ -22,8 +25,9 @@ set -eo pipefail
 #       Idempotent. Also runs automatically as the last step of `create`.
 #
 # Common options:
-#   --yes / -y    Skip confirmation prompt (required for non-TTY)
-#   --help / -h   Show this help
+#   --yes / -y          Skip confirmation prompt (required for non-TTY)
+#   --source-ref <ref>  Branch to ingest from the author URL (create; default main)
+#   --help / -h         Show this help
 
 export GH_PAGER=cat
 
@@ -33,7 +37,7 @@ TEMPLATE_REPO="impact-scholars/isp-micropublication-template"
 # ---------- helpers ----------
 
 usage() {
-    sed -n '4,26p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '4,30p' "$0" | sed 's/^# \{0,1\}//'
     exit 1
 }
 
@@ -82,6 +86,11 @@ ensure_push_collaborator() {
     else
         echo "  ⚠️  $user — failed (may already be collaborator at this level)"
     fi
+}
+
+is_github_url() {
+    # Returns 0 if the URL points at github.com, 1 otherwise.
+    [[ "$1" =~ github\.com[/:] ]]
 }
 
 parse_github_url() {
@@ -216,10 +225,22 @@ cmd_create() {
     local target_name="${2:-}"
     [ -n "$author_url" ] || { echo "Error: <author-repo-url> required"; usage; }
 
-    parse_github_url "$author_url"
-
-    if [ -z "$target_name" ]; then
-        target_name="${AUTHOR_REPO}-$(date +%Y%m%d-%H%M%S)"
+    # Source can be a GitHub author repo or a plain-git host (e.g. GIN/Gitea).
+    # For GitHub we keep the original behavior; for other hosts we fetch the
+    # given URL + --source-ref directly and require an explicit target-name.
+    local source_is_github=false source_url source_label
+    if is_github_url "$author_url"; then
+        source_is_github=true
+        parse_github_url "$author_url"
+        source_url="https://github.com/$AUTHOR_USER/$AUTHOR_REPO.git"
+        source_label="$AUTHOR_USER/$AUTHOR_REPO"
+        if [ -z "$target_name" ]; then
+            target_name="${AUTHOR_REPO}-$(date +%Y%m%d-%H%M%S)"
+        fi
+    else
+        source_url="$author_url"
+        source_label="$author_url"
+        [ -n "$target_name" ] || { echo "Error: non-GitHub source requires an explicit [target-name]"; exit 1; }
     fi
     local target_repo="$ORG/$target_name"
 
@@ -236,15 +257,19 @@ cmd_create() {
     echo "  ✓ gh authenticated as $actor"
     # require_org_membership "$actor"
 
-    local repo_info
-    repo_info=$(gh api "repos/$AUTHOR_USER/$AUTHOR_REPO" 2>/dev/null) || {
-        echo "Error: author repo not accessible: $AUTHOR_USER/$AUTHOR_REPO (must exist and be public)"
-        exit 1
-    }
-    local visibility
-    visibility=$(echo "$repo_info" | jq -r 'if .private then "private" else "public" end')
-    [ "$visibility" = "public" ] || { echo "Error: author repo $AUTHOR_USER/$AUTHOR_REPO is $visibility (must be public)"; exit 1; }
-    echo "  ✓ author repo $AUTHOR_USER/$AUTHOR_REPO is public"
+    if [ "$source_is_github" = "true" ]; then
+        local repo_info
+        repo_info=$(gh api "repos/$AUTHOR_USER/$AUTHOR_REPO" 2>/dev/null) || {
+            echo "Error: author repo not accessible: $AUTHOR_USER/$AUTHOR_REPO (must exist and be public)"
+            exit 1
+        }
+        local visibility
+        visibility=$(echo "$repo_info" | jq -r 'if .private then "private" else "public" end')
+        [ "$visibility" = "public" ] || { echo "Error: author repo $AUTHOR_USER/$AUTHOR_REPO is $visibility (must be public)"; exit 1; }
+        echo "  ✓ author repo $AUTHOR_USER/$AUTHOR_REPO is public"
+    else
+        echo "  ⚠️  non-GitHub source ($author_url) — skipping gh-api public/visibility check"
+    fi
 
     local target_exists=false main_seeded=false review_exists=false pr_open=false
     if repo_exists "$target_repo"; then
@@ -260,7 +285,7 @@ cmd_create() {
     if [ "$target_exists" = "false" ]; then echo "  ○ target repo: does not exist → will create (public)"; else echo "  ✓ target repo: exists"; fi
     echo "  ○ secrets: will set CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID (overwrite)"
     if [ "$main_seeded" = "false" ];   then echo "  ○ main: will seed from template/bare";              else echo "  ✓ main: already seeded (skip)"; fi
-    if [ "$review_exists" = "false" ]; then echo "  ○ review: will create from author/main";            else echo "  ✓ review: exists (skip — use resync-author to refresh)"; fi
+    if [ "$review_exists" = "false" ]; then echo "  ○ review: will create from $author_url@$SOURCE_REF";    else echo "  ✓ review: exists (skip — use resync-author to refresh)"; fi
     if [ "$pr_open" = "false" ];       then echo "  ○ PR: will open review → main";                     else echo "  ✓ PR: already open (skip)"; fi
     echo "  ○ rulesets + env: protect-main (PR required, CODEOWNERS gates workflow/script changes) + editors-only-v-tags + zenodo-publish env (idempotent)"
     echo ""
@@ -270,7 +295,7 @@ cmd_create() {
     # ----- execute -----
     if [ "$target_exists" = "false" ]; then
         echo "=== Creating $target_repo ==="
-        gh repo create "$target_repo" --public --description "Review target for $AUTHOR_USER/$AUTHOR_REPO"
+        gh repo create "$target_repo" --public --description "Review target for $source_label"
     fi
 
     echo "=== Setting secrets ==="
@@ -306,18 +331,17 @@ cmd_create() {
             (
                 cd "$tmp"
                 git fetch origin main
-                git remote add author "https://github.com/$AUTHOR_USER/$AUTHOR_REPO.git" 2>/dev/null || true
-                git fetch author main
+                git fetch "$source_url" "$SOURCE_REF"
                 git checkout -B review origin/main
                 git rm -rf .
-                git checkout author/main -- .
+                git checkout FETCH_HEAD -- .
                 rm -rf .github/workflows
                 # Restore editor-controlled GitHub metadata from bare/main so
                 # workflow hardening and CODEOWNERS survive the review merge.
                 git checkout origin/main -- .github/workflows
                 git checkout origin/main -- .github/CODEOWNERS
                 git add -A
-                git commit -m "Submission from $AUTHOR_USER/$AUTHOR_REPO
+                git commit -m "Submission from $source_label
 
 Original repository: $author_url"
                 git push origin review
@@ -327,14 +351,14 @@ Original repository: $author_url"
 
     if [ "$pr_open" = "false" ]; then
         echo "=== Opening PR ==="
+        local pr_title_name="$AUTHOR_REPO"
+        [ "$source_is_github" = "true" ] || pr_title_name="$target_name"
         gh api "repos/$target_repo/pulls" \
             --method POST \
-            --field title="Submission: $AUTHOR_REPO" \
+            --field title="Submission: $pr_title_name" \
             --field head="review" \
             --field base="main" \
-            --field body="Submitted by @$AUTHOR_USER
-
-Original repository: $author_url
+            --field body="Original repository: $author_url
 
 ---
 
@@ -424,7 +448,15 @@ cmd_resync_author() {
     [ "$FORCE" = "true" ] || { echo "Error: resync-author requires --force (force-pushes review, wipes existing review commits)"; exit 1; }
 
     local target_repo="$ORG/$target_name"
-    parse_github_url "$author_url"
+    local source_url source_label
+    if is_github_url "$author_url"; then
+        parse_github_url "$author_url"
+        source_url="https://github.com/$AUTHOR_USER/$AUTHOR_REPO.git"
+        source_label="$AUTHOR_USER/$AUTHOR_REPO"
+    else
+        source_url="$author_url"
+        source_label="$author_url"
+    fi
 
     echo "=== Preflight: resync-author $target_repo ==="
     require_gh_auth
@@ -435,7 +467,7 @@ cmd_resync_author() {
     echo ""
     echo "=== Plan ==="
     echo "  ⚠️  WILL FORCE-PUSH review branch — wipes any existing commits on review"
-    echo "  ○ rebuild review from $AUTHOR_USER/$AUTHOR_REPO@main on top of $target_repo@main"
+    echo "  ○ rebuild review from $source_label@$SOURCE_REF on top of $target_repo@main"
     echo ""
     confirm || { echo "Aborted."; exit 0; }
 
@@ -447,18 +479,17 @@ cmd_resync_author() {
     (
         cd "$tmp"
         git fetch origin main
-        git remote add author "https://github.com/$AUTHOR_USER/$AUTHOR_REPO.git"
-        git fetch author main
+        git fetch "$source_url" "$SOURCE_REF"
         git checkout -B review origin/main
         git rm -rf .
-        git checkout author/main -- .
+        git checkout FETCH_HEAD -- .
         rm -rf .github/workflows
         # Restore editor-controlled GitHub metadata from main so workflow
         # hardening and CODEOWNERS survive the review merge.
         git checkout origin/main -- .github/workflows
         git checkout origin/main -- .github/CODEOWNERS
         git add -A
-        git commit -m "Resync from $AUTHOR_USER/$AUTHOR_REPO
+        git commit -m "Resync from $source_label
 
 Original repository: $author_url"
         git push --force origin review
@@ -497,14 +528,16 @@ cmd_apply_rulesets() {
 
 ASSUME_YES=false
 FORCE=false
+SOURCE_REF="main"
 ARGS=()
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --yes|-y)   ASSUME_YES=true; shift ;;
-        --force)    FORCE=true; shift ;;
-        --help|-h)  usage ;;
-        *)          ARGS+=("$1"); shift ;;
+        --yes|-y)      ASSUME_YES=true; shift ;;
+        --force)       FORCE=true; shift ;;
+        --source-ref)  SOURCE_REF="$2"; shift 2 ;;
+        --help|-h)     usage ;;
+        *)             ARGS+=("$1"); shift ;;
     esac
 done
 
