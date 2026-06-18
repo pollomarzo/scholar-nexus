@@ -21,8 +21,8 @@ set -eo pipefail
 #       Force-push fresh author content onto review branch. Wipes any existing review commits.
 #
 #   apply-rulesets <target-name>
-#       Apply branch + tag rulesets + zenodo-publish environment to the target repo.
-#       Idempotent. Also runs automatically as the last step of `create`.
+#       Apply branch + tag rulesets + zenodo-publish env + grant @ORG/editors
+#       write access. Idempotent. Also runs automatically as the last step of `create`.
 #
 # Common options:
 #   --yes / -y          Skip confirmation prompt (required for non-TTY)
@@ -148,6 +148,18 @@ apply_rulesets_to_repo() {
     local owner_type
     owner_type=$(gh api "users/$ORG" --jq .type)
 
+    # CODEOWNERS + tag bypass both require the editors team to have write on the
+    # repo; without it GitHub silently ignores team references. Idempotent.
+    if [ "$owner_type" = "Organization" ]; then
+        if gh api -X PUT "orgs/$ORG/teams/editors/repos/$target_repo" \
+            -f permission=push >/dev/null 2>&1; then
+            echo "  ✓ @$ORG/editors team granted write access"
+        else
+            echo "Error: failed to grant @$ORG/editors team write on $target_repo" >&2
+            return 1
+        fi
+    fi
+
     upsert_ruleset "$target_repo" "$(cat <<'EOF'
 {
   "name": "protect-main",
@@ -203,6 +215,20 @@ EOF
 }
 EOF
 )"
+
+    # GitHub Pages with workflow build type — required for deploy-paper.yml
+    # to publish the rendered paper. Idempotent: GET first, then POST only if
+    # absent (POST returns 409 on existing config).
+    if gh api "repos/$target_repo/pages" >/dev/null 2>&1; then
+        echo "  ✓ Pages already enabled; skipping"
+    else
+        if gh api -X POST "repos/$target_repo/pages" -f build_type=workflow >/dev/null 2>&1; then
+            echo "  ✓ Pages enabled (build_type=workflow)"
+        else
+            echo "Error: failed to enable Pages on $target_repo" >&2
+            return 1
+        fi
+    fi
 
     # zenodo-publish environment — gates the publish job to v* tag refs only.
     gh api -X PUT "repos/$target_repo/environments/zenodo-publish" \
@@ -285,7 +311,7 @@ cmd_create() {
     if [ "$main_seeded" = "false" ];   then echo "  ○ main: will seed from template/bare";              else echo "  ✓ main: already seeded (skip)"; fi
     if [ "$review_exists" = "false" ]; then echo "  ○ review: will create from $author_url@$SOURCE_REF";    else echo "  ✓ review: exists (skip — use resync-author to refresh)"; fi
     if [ "$pr_open" = "false" ];       then echo "  ○ PR: will open review → main";                     else echo "  ✓ PR: already open (skip)"; fi
-    echo "  ○ rulesets + env: protect-main (PR required, CODEOWNERS gates workflow/script changes) + editors-only-v-tags + zenodo-publish env (idempotent)"
+    echo "  ○ rulesets + env: @$ORG/editors write grant + protect-main (PR required, CODEOWNERS gates workflow changes) + editors-only-v-tags + Pages (workflow build) + zenodo-publish env (idempotent)"
     echo ""
 
     confirm || { echo "Aborted."; exit 0; }
@@ -507,8 +533,10 @@ cmd_apply_rulesets() {
 
     echo ""
     echo "=== Plan ==="
-    echo "  ○ branch ruleset 'protect-main' on refs/heads/main (require PR; CODEOWNERS review only for workflow/script changes)"
+    echo "  ○ grant @$ORG/editors team write access (org-owned repos only)"
+    echo "  ○ branch ruleset 'protect-main' on refs/heads/main (require PR; CODEOWNERS review only for workflow changes)"
     echo "  ○ tag ruleset 'editors-only-v-tags' on refs/tags/v* (@$ORG/editors on org repos, repo admins on personal test repos)"
+    echo "  ○ enable GitHub Pages (build_type=workflow)"
     echo "  ○ 'zenodo-publish' deployment environment with v* tag policy"
     echo "  (idempotent — existing rulesets/env are skipped if already configured)"
     echo ""
