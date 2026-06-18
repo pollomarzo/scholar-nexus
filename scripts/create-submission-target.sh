@@ -5,7 +5,7 @@ set -eo pipefail
 #
 # Subcommands:
 #   create <author-repo-url> [target-name]
-#       Create review target repo, set secrets, seed main, build review branch, open PR.
+#       Create review target repo, seed main, build review branch, open PR.
 #       Idempotent: re-running on an existing target skips already-done steps.
 #       Author URL may be GitHub or a plain-git host (e.g. GIN/Gitea); for a
 #       non-GitHub source, [target-name] is required and --source-ref selects
@@ -28,16 +28,19 @@ set -eo pipefail
 #   --yes / -y          Skip confirmation prompt (required for non-TTY)
 #   --source-ref <ref>  Branch to ingest from the author URL (create; default main)
 #   --help / -h         Show this help
+#
+# Environment:
+#   ISP_ORG   Override the target org/account (default impact-scholars)
 
 export GH_PAGER=cat
 
-ORG="pollomarzo"
+ORG="${ISP_ORG:-impact-scholars}"
 TEMPLATE_REPO="impact-scholars/isp-micropublication-template"
 
 # ---------- helpers ----------
 
 usage() {
-    sed -n '4,30p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '4,33p' "$0" | sed 's/^# \{0,1\}//'
     exit 1
 }
 
@@ -247,10 +250,6 @@ cmd_create() {
     # ----- preflight -----
     echo "=== Preflight: create $target_repo ==="
 
-    [ -n "$CLOUDFLARE_API_TOKEN" ] || { echo "Error: CLOUDFLARE_API_TOKEN unset in environment"; exit 1; }
-    [ -n "$CLOUDFLARE_ACCOUNT_ID" ] || { echo "Error: CLOUDFLARE_ACCOUNT_ID unset in environment"; exit 1; }
-    echo "  ✓ cloudflare env vars set"
-
     require_gh_auth
     local actor
     actor=$(gh api user --jq .login)
@@ -283,7 +282,6 @@ cmd_create() {
     echo ""
     echo "=== Plan ==="
     if [ "$target_exists" = "false" ]; then echo "  ○ target repo: does not exist → will create (public)"; else echo "  ✓ target repo: exists"; fi
-    echo "  ○ secrets: will set CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID (overwrite)"
     if [ "$main_seeded" = "false" ];   then echo "  ○ main: will seed from template/bare";              else echo "  ✓ main: already seeded (skip)"; fi
     if [ "$review_exists" = "false" ]; then echo "  ○ review: will create from $author_url@$SOURCE_REF";    else echo "  ✓ review: exists (skip — use resync-author to refresh)"; fi
     if [ "$pr_open" = "false" ];       then echo "  ○ PR: will open review → main";                     else echo "  ✓ PR: already open (skip)"; fi
@@ -297,10 +295,6 @@ cmd_create() {
         echo "=== Creating $target_repo ==="
         gh repo create "$target_repo" --public --description "Review target for $source_label"
     fi
-
-    echo "=== Setting secrets ==="
-    gh secret set CLOUDFLARE_API_TOKEN  --repo "$target_repo" --body "$CLOUDFLARE_API_TOKEN"  >/dev/null && echo "  ✓ CLOUDFLARE_API_TOKEN"
-    gh secret set CLOUDFLARE_ACCOUNT_ID --repo "$target_repo" --body "$CLOUDFLARE_ACCOUNT_ID" >/dev/null && echo "  ✓ CLOUDFLARE_ACCOUNT_ID"
 
     if [ "$main_seeded" = "false" ] || [ "$review_exists" = "false" ]; then
         local tmp
